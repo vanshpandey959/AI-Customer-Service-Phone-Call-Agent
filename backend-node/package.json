@@ -1,0 +1,21 @@
+{
+  "name": "restaurant-cs-agent-node",
+  "version": "1.0.0",
+  "description": "Node.js backend for the restaurant CS agent — Twilio voice webhooks, session/call persistence, complaints/feedback, and proxy to the Python RAG service",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "mongoose": "^8.7.0",
+    "twilio": "^5.11.2"
+  }
+}
