@@ -5,6 +5,7 @@ import { connectDB } from "./src/db.js";
 // import chatRouter from "./src/routes/chat.js";
 import recordsRouter from "./src/routes/records.js";
 import voiceRouter from "./src/routes/voice.js";
+import { attachVoiceStream } from "./src/voiceStream.js";
 
 const app = express();
 
@@ -56,7 +57,7 @@ async function start() {
     process.exit(1);
   }
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log(`Node backend listening on port ${config.port}`);
     console.log(`Proxying RAG requests to ${config.pythonServiceUrl}`);
 
@@ -69,6 +70,7 @@ async function start() {
     console.log(`  POST ${base}/voice/gather`);
     console.log(`  POST ${base}/voice/status`);
     console.log(`  GET  ${base}/voice/selfcheck  ← run this before triggering a call`);
+    console.log(`Voice mode: ${config.voiceMode} (set VOICE_MODE=gnani in .env to use Gnani speech over a media stream)`);
     if (!config.publicBaseUrl) {
       console.warn(
         "Calls will connect, play the trial notice, then hang up right after the keypress " +
@@ -76,6 +78,9 @@ async function start() {
       );
     }
   });
+
+  // Twilio media streams (VOICE_MODE=gnani) connect to a WebSocket on this same server.
+  attachVoiceStream(server);
 }
 
 start();

@@ -25,8 +25,12 @@ async function post(path, body) {
  * entry — it does NOT create a Complaint/Feedback document from this
  * directly; that only happens via the end-of-call reconciliation pass.
  */
-export async function askRagService(message, history) {
-  const data = await post("/ask", { message, history });
+export async function askRagService(message, history, language) {
+  const body = { message, history };
+  // Optional conversation language ("hi-IN", "pa-IN", "en-IN"): only a tie-breaker
+  // for very short replies, see backend-python/rag.py.
+  if (language) body.language = language;
+  const data = await post("/ask", body);
   return { answer: data.answer, classification: data.classification };
 }
 

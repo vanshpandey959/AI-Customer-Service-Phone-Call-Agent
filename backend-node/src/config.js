@@ -31,4 +31,12 @@ export const config = {
   // Language for the call's speech recognition (Gather) and text-to-speech
   // (Say). en-IN matches Indian-English callers; overridable in .env.
   voiceLanguage: process.env.VOICE_LANGUAGE || "en-IN",
+
+  // How calls are handled:
+  //   "twilio" - Twilio's own speech recognition and voice (Gather/Say), English only
+  //   "gnani"  - a Twilio media stream; Gnani does the listening and speaking (Hindi, Punjabi, English)
+  voiceMode: (process.env.VOICE_MODE || "twilio").toLowerCase(),
+  // Gnani mode: how long to wait for the caller to say something after the agent
+  // finishes speaking, before asking "are you still there?" (then hanging up on the next silence).
+  silenceTimeoutMs: Number(process.env.VOICE_SILENCE_TIMEOUT_MS || 10000),
 };

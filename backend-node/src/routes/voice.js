@@ -11,6 +11,8 @@ import {
   reconcileCall,
 } from "../callService.js";
 import { askRagService } from "../ragClient.js";
+import { gnaniConfig } from "../gnani/gnaniConfig.js";
+import { makeStreamToken } from "../voiceStream.js";
 
 const router = Router();
 const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -57,7 +59,7 @@ function signedUrlFor(req) {
 }
 
 const GREETING =
-  "Thanks for calling Spice Route Kitchen. I can help with the menu, timings, offers, or anything else. What can I do for you?";
+  "Thanks for calling Chandigarh Cafe and Restaurant. I can help with the menu, timings, offers, or anything else. What can I do for you?";
 const DIDNT_CATCH_THAT = "Sorry, I didn't catch that. Could you repeat it?";
 const TROUBLE_RESPONDING =
   "Sorry, I'm having trouble responding right now. Could you repeat that?";
@@ -81,6 +83,20 @@ function gatherTwiml(sayText) {
     actionOnEmptyResult: true,
     language: config.voiceLanguage,
   });
+  return twiml.toString();
+}
+
+/**
+ * TwiML for VOICE_MODE=gnani: instead of Twilio's own Gather/Say, open a two-way
+ * media stream to our WebSocket (src/voiceStream.js). The URL carries a signed,
+ * short-lived token in its path, because Twilio does not allow query strings here.
+ * Nothing follows <Connect>, so closing the stream ends the call.
+ */
+function streamTwiml(callSid, callerNumber) {
+  const wsBase = config.publicBaseUrl.replace(/^http/i, "ws"); // https -> wss
+  const twiml = new VoiceResponse();
+  const stream = twiml.connect().stream({ url: `${wsBase}/voice/stream/${makeStreamToken(callSid)}` });
+  stream.parameter({ name: "callerNumber", value: callerNumber || "" });
   return twiml.toString();
 }
 
@@ -134,6 +150,16 @@ router.post("/incoming", validateTwilioSignature, twimlRoute(async (req, res) =>
     // Still greet the caller even if the DB write failed — better than
     // silence, and the call can still proceed (though this turn's history
     // won't be saved if the DB is genuinely down).
+  }
+
+  if (config.voiceMode === "gnani") {
+    if (gnaniConfig.apiKey && gnaniConfig.voice && config.publicBaseUrl) {
+      return sendTwiml(res, streamTwiml(callSid, callerNumber));
+    }
+    console.error(
+      "[voice] VOICE_MODE=gnani, but GNANI_API_KEY, GNANI_VOICE or PUBLIC_BASE_URL is missing. " +
+        "Falling back to Twilio's own Gather/Say voice for this call."
+    );
   }
 
   sendTwiml(res, gatherTwiml(GREETING));
@@ -233,6 +259,19 @@ router.get("/selfcheck", twimlRoute(async (req, res) => {
     detail: config.skipTwilioValidation
       ? "DISABLED (TWILIO_SKIP_VALIDATION=true) — webhooks accept anyone. Re-enable after debugging."
       : "Enabled — the webhook POST below is signed with the exact algorithm Twilio uses, so it exercises the real code path.",
+  });
+
+  const gnaniReady = Boolean(gnaniConfig.apiKey && gnaniConfig.voice);
+  report.checks.push({
+    name: "voice-mode",
+    ok: config.voiceMode !== "gnani" || gnaniReady,
+    detail:
+      config.voiceMode === "gnani"
+        ? gnaniReady
+          ? "VOICE_MODE=gnani: calls open a Twilio media stream and Gnani does the listening and speaking."
+          : "VOICE_MODE=gnani, but GNANI_API_KEY and/or GNANI_VOICE are not set, so calls would fall back to Twilio's own voice."
+        : "VOICE_MODE=twilio: calls use Twilio's own speech recognition and voice (English only). Set VOICE_MODE=gnani to use Gnani.",
+    fix: config.voiceMode === "gnani" && !gnaniReady ? "Set GNANI_API_KEY and GNANI_VOICE in backend-node/.env and restart the server." : undefined,
   });
 
   if (missing.length === 0) {
