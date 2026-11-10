@@ -1,8 +1,16 @@
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+// Must match ADMIN_TOKEN in backend-node/.env (when that is set).
+const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN || "";
 
 async function request(path, options) {
   const response = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // ngrok's free plan answers browser requests with a warning page instead of the API
+      // unless this header is present. Harmless when the API is not behind ngrok.
+      "ngrok-skip-browser-warning": "true",
+      ...(ADMIN_TOKEN ? { "x-admin-token": ADMIN_TOKEN } : {}),
+    },
     ...options,
   });
   if (!response.ok) {

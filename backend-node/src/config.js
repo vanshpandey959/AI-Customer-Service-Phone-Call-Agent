@@ -11,7 +11,16 @@ function requireEnv(name) {
 export const config = {
   port: process.env.PORT || 5000,
   pythonServiceUrl: (process.env.PYTHON_SERVICE_URL || "http://localhost:8000").replace(/\/$/, ""),
-  frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+  // The dashboard's origin(s), comma-separated. Both spellings of localhost are allowed by
+  // default, because http://localhost:5173 and http://127.0.0.1:5173 are different origins to a browser.
+  frontendOrigins: (process.env.FRONTEND_ORIGIN || "http://localhost:5173,http://127.0.0.1:5173")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  // Protects /api/* and the call-triggering routes (see src/middleware/adminAuth.js).
+  adminToken: process.env.ADMIN_TOKEN || null,
+  // How long to wait for the Python RAG service to answer a question during a call.
+  ragTimeoutMs: Number(process.env.RAG_TIMEOUT_MS || 20000),
   mongodbUri: requireEnv("MONGODB_URI"),
   mongodbDb: process.env.MONGODB_DB || "restaurant_cs_operations",
   // Used to validate that incoming /voice/* webhooks genuinely came from

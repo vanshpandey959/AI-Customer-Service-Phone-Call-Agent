@@ -21,7 +21,8 @@ MONGODB_COLLECTION = os.getenv("MONGODB_COLLECTION", "knowledge_base")
 VECTOR_INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "vector_index")
 
 GROQ_API_KEY = _require_env("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+# gpt-oss-120b passed every check in eval_answers.py (language, facts, style, complaint/feedback labels).
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 # --- Embeddings ---
 # multilingual-e5-small understands English, Hindi and Punjabi in one vector
@@ -87,5 +88,7 @@ def embed_query(text: str) -> list[float]:
 def get_groq_client() -> Groq:
     global _groq_client
     if _groq_client is None:
-        _groq_client = Groq(api_key=GROQ_API_KEY)
+        # A caller is waiting on the line: give up after 15 s (and retry once) instead of the
+        # library's default of 60 s with two retries, which would leave minutes of silence.
+        _groq_client = Groq(api_key=GROQ_API_KEY, timeout=15.0, max_retries=1)
     return _groq_client

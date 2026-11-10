@@ -15,6 +15,9 @@ const transcriptEntrySchema = new mongoose.Schema(
       enum: ["complaint", "feedback", "normal", null],
       default: null,
     },
+    // Set only on "user" entries of phone calls handled by Gnani: the conversation
+    // language at that turn ("en-IN", "hi-IN" or "pa-IN"), shown as a badge in the dashboard.
+    language: { type: String, default: null },
   },
   { _id: false }
 );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchCalls,
   fetchCallDetail,
@@ -54,6 +54,19 @@ export default function AdminPage() {
     loadAll();
   }, []);
 
+  // Keep the dashboard live while calls are happening: refresh every 10 seconds (only while this
+  // tab is visible), including the open call's transcript.
+  const selectedCallIdRef = useRef(null);
+  selectedCallIdRef.current = selectedCallId;
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      loadAll();
+      if (selectedCallIdRef.current) loadCallDetail(selectedCallIdRef.current, { silent: true });
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     if (!selectedCallId) return;
     loadCallDetail(selectedCallId);
@@ -75,16 +88,19 @@ export default function AdminPage() {
     }
   }
 
-  async function loadCallDetail(callId) {
-    setCallDetailLoading(true);
-    setCallDetailError(null);
+  async function loadCallDetail(callId, { silent = false } = {}) {
+    // silent: a background refresh, so no "Loading…" flicker and no error banner
+    if (!silent) {
+      setCallDetailLoading(true);
+      setCallDetailError(null);
+    }
     try {
       const data = await fetchCallDetail(callId);
       setSelectedCall(data);
     } catch (err) {
-      setCallDetailError("Couldn't load this call.");
+      if (!silent) setCallDetailError("Couldn't load this call.");
     } finally {
-      setCallDetailLoading(false);
+      if (!silent) setCallDetailLoading(false);
     }
   }
 
@@ -148,7 +164,7 @@ export default function AdminPage() {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl border-2 border-primary text-primary">
               <IconPhone />
             </div>
-            <span className="text-lg font-bold tracking-tight text-text">Spice&nbsp;Route</span>
+            <span className="text-lg font-bold tracking-tight text-text">Chandigarh&nbsp;Cafe</span>
           </div>
 
           <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Menu</p>
@@ -199,7 +215,7 @@ export default function AdminPage() {
 
           <div className="mt-auto rounded-2xl bg-primary-dark p-4 text-white">
             <p className="text-sm font-semibold leading-snug">AI agent live on your Twilio number</p>
-            <p className="mt-1 text-xs text-white/70">Twilio + Groq, running turn by turn.</p>
+            <p className="mt-1 text-xs text-white/70">Twilio + Gnani speech + Groq, in English, Hindi and Punjabi.</p>
             <div className="mt-3">
               <TestCallTrigger compact />
             </div>
@@ -233,7 +249,7 @@ export default function AdminPage() {
                 </div>
                 <div className="hidden sm:block">
                   <p className="text-sm font-semibold leading-tight text-text">Admin</p>
-                  <p className="text-xs text-text-muted">Spice Route Kitchen</p>
+                  <p className="text-xs text-text-muted">Chandigarh Cafe and Restaurant</p>
                 </div>
               </div>
             </div>

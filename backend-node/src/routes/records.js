@@ -7,8 +7,14 @@ import { isValidCallId } from "../callService.js";
 
 const router = Router();
 
+// Express 4 does not catch errors thrown inside async handlers: without this wrapper a
+// database hiccup becomes an unhandled promise rejection, which crashes the whole server
+// (and any phone call in progress with it). The wrapper passes the error to Express's
+// error handler in server.js, which answers 500 and keeps running.
+const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
 /** List all calls (summary only — no full transcript, keeps the list light). */
-router.get("/calls", async (req, res) => {
+router.get("/calls", wrap(async (req, res) => {
   const calls = await Call.find({}, "channel callSid callerNumber status startedAt endedAt transcript")
     .sort({ startedAt: -1 })
     .lean();
@@ -25,10 +31,10 @@ router.get("/calls", async (req, res) => {
       messageCount: c.transcript.length,
     }))
   );
-});
+}));
 
 /** Full detail for one call, including its linked complaints and feedback. */
-router.get("/calls/:id", async (req, res) => {
+router.get("/calls/:id", wrap(async (req, res) => {
   const { id } = req.params;
   if (!isValidCallId(id)) {
     return res.status(400).json({ error: "Invalid call id" });
@@ -45,10 +51,10 @@ router.get("/calls/:id", async (req, res) => {
   ]);
 
   res.json({ ...call, complaints, feedback });
-});
+}));
 
 /** Delete a call, cascading to delete its linked complaints and feedback too. */
-router.delete("/calls/:id", async (req, res) => {
+router.delete("/calls/:id", wrap(async (req, res) => {
   const { id } = req.params;
   if (!isValidCallId(id)) {
     return res.status(400).json({ error: "Invalid call id" });
@@ -66,16 +72,16 @@ router.delete("/calls/:id", async (req, res) => {
   ]);
 
   res.json({ deleted: true });
-});
+}));
 
 /** All complaints, most recent first. */
-router.get("/complaints", async (req, res) => {
+router.get("/complaints", wrap(async (req, res) => {
   const complaints = await Complaint.find({}).sort({ createdAt: -1 }).lean();
   res.json(complaints);
-});
+}));
 
 /** Update a complaint's status (pending <-> resolved). */
-router.patch("/complaints/:id", async (req, res) => {
+router.patch("/complaints/:id", wrap(async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -92,10 +98,10 @@ router.patch("/complaints/:id", async (req, res) => {
   }
 
   res.json(complaint);
-});
+}));
 
 /** Delete a single complaint. */
-router.delete("/complaints/:id", async (req, res) => {
+router.delete("/complaints/:id", wrap(async (req, res) => {
   const { id } = req.params;
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid complaint id" });
@@ -107,16 +113,16 @@ router.delete("/complaints/:id", async (req, res) => {
   }
 
   res.json({ deleted: true });
-});
+}));
 
 /** All feedback, most recent first. */
-router.get("/feedback", async (req, res) => {
+router.get("/feedback", wrap(async (req, res) => {
   const feedback = await Feedback.find({}).sort({ createdAt: -1 }).lean();
   res.json(feedback);
-});
+}));
 
 /** Delete a single feedback entry. */
-router.delete("/feedback/:id", async (req, res) => {
+router.delete("/feedback/:id", wrap(async (req, res) => {
   const { id } = req.params;
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid feedback id" });
@@ -128,6 +134,6 @@ router.delete("/feedback/:id", async (req, res) => {
   }
 
   res.json({ deleted: true });
-});
+}));
 
 export default router;

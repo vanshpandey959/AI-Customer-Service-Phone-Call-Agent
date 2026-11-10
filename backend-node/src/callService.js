@@ -69,11 +69,11 @@ export async function getHistoryForRag(callId) {
  * call can be merged into one clean record instead of creating a
  * duplicate per turn.
  */
-export async function appendTurn(callId, userMessage, assistantMessage, classification) {
+export async function appendTurn(callId, userMessage, assistantMessage, classification, language = null) {
   const call = await getCall(callId);
   if (!call) return null;
 
-  call.transcript.push({ role: "user", content: userMessage, classification });
+  call.transcript.push({ role: "user", content: userMessage, classification, language });
   call.transcript.push({ role: "assistant", content: assistantMessage });
   await call.save();
 

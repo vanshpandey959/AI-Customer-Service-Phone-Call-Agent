@@ -70,6 +70,7 @@ class CallSession {
     this.options = {
       silenceTimeoutMs: config.silenceTimeoutMs,
       endCallDelayMs: 1500,
+      markGraceMs: 5000, // see say(): how long past the end of a reply to wait for Twilio's confirmation
       stt: {},
       tts: {},
       ...options,
@@ -84,6 +85,7 @@ class CallSession {
     this.tts = null;
     this.markSeq = 0;
     this.pendingMark = null;
+    this.markWatchdog = null;
     this.endAfterReply = false;
     this.reprompts = 0;
     this.silenceTimer = null;
@@ -114,25 +116,29 @@ class CallSession {
     } catch {
       return;
     }
-    switch (msg.event) {
-      case "start":
-        this.onStart(msg).catch((err) => {
-          this.log("could not start the call:", err.message);
-          this.end("start-failed");
-        });
-        break;
-      case "media":
-        this.onMedia(msg);
-        break;
-      case "mark":
-        this.onMark(msg);
-        break;
-      case "stop":
-        this.log("call ended (stop event)");
-        this.cleanup();
-        break;
-      default:
-        break; // "connected", "dtmf"
+    try {
+      switch (msg.event) {
+        case "start":
+          this.onStart(msg).catch((err) => {
+            this.log("could not start the call:", err.message);
+            this.end("start-failed");
+          });
+          break;
+        case "media":
+          this.onMedia(msg);
+          break;
+        case "mark":
+          this.onMark(msg);
+          break;
+        case "stop":
+          this.log("call ended (stop event)");
+          this.cleanup();
+          break;
+        default:
+          break; // "connected", "dtmf"
+      }
+    } catch (err) {
+      this.log(`error while handling a "${msg.event}" message:`, err.message);
     }
   }
 
@@ -154,12 +160,13 @@ class CallSession {
     });
     this.stt.on("error", (err) => this.log("STT error:", err.message));
 
-    const [call] = await Promise.all([
-      this.deps.findOrCreateCall(this.callSid, callerNumber),
-      this.stt.connect(),
-      this.tts.connect(),
-    ]);
-    this.callId = call._id.toString();
+    // If the database is unavailable the call still works, it just is not saved.
+    const callRecord = Promise.resolve(this.deps.findOrCreateCall(this.callSid, callerNumber)).catch((err) => {
+      this.log("could not load or create the call record, this conversation will not be saved:", err.message);
+      return null;
+    });
+    const [call] = await Promise.all([callRecord, this.stt.connect(), this.tts.connect()]);
+    this.callId = call ? call._id.toString() : null;
     this.log("Gnani connected, greeting the caller");
     await this.say(phrase("greeting"));
   }
@@ -173,6 +180,7 @@ class CallSession {
 
   onMark(msg) {
     if (!this.pendingMark || msg.mark?.name !== this.pendingMark) return;
+    clearTimeout(this.markWatchdog);
     this.pendingMark = null; // Twilio has now finished PLAYING the reply to the caller
     if (this.endAfterReply) {
       setTimeout(() => this.end("goodbye"), this.options.endCallDelayMs);
@@ -195,6 +203,7 @@ class CallSession {
     this.clearSilenceTimer();
     const mark = `reply-${++this.markSeq}`;
     this.pendingMark = mark;
+    let playbackMs = 0;
     try {
       const stats = await this.tts.speak(text, {
         onAudio: (audio) => {
@@ -209,12 +218,21 @@ class CallSession {
           });
         },
       });
+      playbackMs = stats.audioSeconds * 1000;
       this.log(`spoke ${stats.audioSeconds.toFixed(1)}s of audio (first audio after ${stats.firstAudioMs} ms)`);
     } catch (err) {
       this.log("TTS failed:", err.message);
     }
     // Twilio echoes this mark back once everything before it has actually played.
     this.sendToTwilio({ event: "mark", streamSid: this.streamSid, mark: { name: mark } });
+    // Safety net: if the echo never comes, the agent would wait forever. Carry on once the reply
+    // must have finished playing (its length plus a grace period).
+    clearTimeout(this.markWatchdog);
+    this.markWatchdog = setTimeout(() => {
+      if (this.pendingMark !== mark) return;
+      this.log(`Twilio did not confirm "${mark}" in time, carrying on`);
+      this.onMark({ mark: { name: mark } });
+    }, playbackMs + this.options.markGraceMs);
   }
 
   // ----- hearing the caller -----
@@ -242,7 +260,14 @@ class CallSession {
     this.log(`heard "${t.text}" (Gnani tag ${t.language}, STT ${t.latencyMs} ms) -> conversation language ${this.language}`);
 
     await this.persist; // the previous turn must be saved before its history is read
-    const history = (await this.deps.getHistory(this.callId)) || [];
+    let history = [];
+    if (this.callId) {
+      try {
+        history = (await this.deps.getHistory(this.callId)) || [];
+      } catch (err) {
+        this.log("could not read the conversation history:", err.message);
+      }
+    }
     const historyMs = Date.now() - heardAt;
 
     let answer;
@@ -261,9 +286,11 @@ class CallSession {
     );
 
     if (isGoodbye(t.text)) this.endAfterReply = true;
-    this.persist = Promise.resolve(this.deps.appendTurn(this.callId, t.text, answer, classification)).catch((err) =>
-      this.log("could not save the turn:", err.message)
-    );
+    if (this.callId) {
+      this.persist = Promise.resolve(
+        this.deps.appendTurn(this.callId, t.text, answer, classification, this.language)
+      ).catch((err) => this.log("could not save the turn:", err.message));
+    }
     await this.say(answer);
   }
 
@@ -309,6 +336,7 @@ class CallSession {
   cleanup() {
     this.closed = true;
     this.clearSilenceTimer();
+    clearTimeout(this.markWatchdog);
     if (this.stt) this.stt.close();
     if (this.tts) this.tts.close();
   }

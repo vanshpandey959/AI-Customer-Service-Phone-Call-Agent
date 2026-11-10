@@ -1,7 +1,9 @@
 import crypto from "crypto";
 import { Router } from "express";
 import twilio from "twilio";
+import WebSocket from "ws";
 import { config } from "../config.js";
+import { requireAdmin } from "../middleware/adminAuth.js";
 import {
   findOrCreateCallByCallSid,
   getCallByCallSid,
@@ -12,6 +14,7 @@ import {
 } from "../callService.js";
 import { askRagService } from "../ragClient.js";
 import { gnaniConfig } from "../gnani/gnaniConfig.js";
+import { GnaniTts } from "../gnani/ttsClient.js";
 import { makeStreamToken } from "../voiceStream.js";
 
 const router = Router();
@@ -228,7 +231,7 @@ router.post("/status", validateTwilioSignature, twimlRoute(async (req, res) => {
  * so it catches the "connects, trial message, then hang up" bugs without
  * spending any call credit.
  */
-router.get("/selfcheck", twimlRoute(async (req, res) => {
+router.get("/selfcheck", requireAdmin, twimlRoute(async (req, res) => {
   const report = {
     ok: false,
     checkedAt: new Date().toISOString(),
@@ -331,6 +334,61 @@ router.get("/selfcheck", twimlRoute(async (req, res) => {
       });
     }
 
+    // 1b. VOICE_MODE=gnani: the two other hops a call depends on. The media stream must be
+    //     reachable from the internet through the tunnel (Twilio connects to it right after
+    //     the webhook above), and the Gnani API must accept the key.
+    if (config.voiceMode === "gnani" && gnaniReady) {
+      const wsUrl = `${config.publicBaseUrl.replace(/^http/i, "ws")}/voice/stream/${makeStreamToken("CAselfcheck")}`;
+      const stream = await new Promise((resolve) => {
+        const ws = new WebSocket(wsUrl);
+        const timer = setTimeout(() => {
+          ws.terminate();
+          resolve({ ok: false, detail: "no answer within 8 seconds" });
+        }, 8000);
+        ws.on("open", () => {
+          clearTimeout(timer);
+          ws.close();
+          resolve({ ok: true });
+        });
+        ws.on("unexpected-response", (_req, response) => {
+          clearTimeout(timer);
+          resolve({ ok: false, detail: `HTTP ${response.statusCode}` });
+        });
+        ws.on("error", (err) => {
+          clearTimeout(timer);
+          resolve({ ok: false, detail: err.message });
+        });
+      });
+      report.checks.push({
+        name: "media-stream-websocket",
+        ok: stream.ok,
+        detail: stream.ok
+          ? `Opened ${wsUrl.replace(/\/[^/]+$/, "/<token>")} through the public URL: Twilio's media stream can reach this server.`
+          : `Could not open the media-stream WebSocket through ${config.publicBaseUrl}: ${stream.detail}`,
+        fix: stream.ok
+          ? undefined
+          : "Twilio streams the call's audio over a WebSocket to this URL. Check the tunnel is up and forwards to this server's port, and that PUBLIC_BASE_URL is the current https URL.",
+      });
+
+      const tts = new GnaniTts({ requestTimeoutMs: 8000 });
+      try {
+        await Promise.race([
+          tts.connect(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("no answer within 8 seconds")), 8000)),
+        ]);
+        report.checks.push({ name: "gnani-api", ok: true, detail: "Connected to the Gnani speech API with your key." });
+      } catch (err) {
+        report.checks.push({
+          name: "gnani-api",
+          ok: false,
+          detail: `Could not connect to the Gnani speech API: ${err.message}`,
+          fix: "Check GNANI_API_KEY (a wrong key is rejected with HTTP 401) and this computer's internet connection.",
+        });
+      } finally {
+        tts.close();
+      }
+    }
+
     // 2. The Python RAG service — if it's down, calls still connect and the
     //    agent still speaks the greeting, but every answer fails.
     try {
@@ -376,7 +434,7 @@ router.get("/selfcheck", twimlRoute(async (req, res) => {
  * independently refuses to call any number that isn't verified, which
  * is a second, Twilio-enforced backstop on top of this.
  */
-router.post("/trigger-test-call", twimlRoute(async (req, res) => {
+router.post("/trigger-test-call", requireAdmin, twimlRoute(async (req, res) => {
   const { twilioAccountSid, twilioAuthToken, twilioPhoneNumber, testPhoneNumber, publicBaseUrl } = config;
 
   const missing = [];

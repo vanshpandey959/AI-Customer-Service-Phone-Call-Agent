@@ -1,10 +1,13 @@
 import { config } from "./config.js";
 
-async function post(path, body) {
+async function post(path, body, timeoutMs = config.ragTimeoutMs) {
+  // A hung RAG service must not leave a caller in silence: fail after timeoutMs so the
+  // caller hears the "having trouble" line instead.
   const response = await fetch(`${config.pythonServiceUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
@@ -41,6 +44,7 @@ export async function askRagService(message, history, language) {
  * Returns deduplicated, cleaned-up lists: {complaints: string[], feedback: string[]}.
  */
 export async function reconcileFlaggedMoments(flaggedMoments) {
-  const data = await post("/reconcile", { flagged: flaggedMoments });
+  // Runs after the call has ended, so nobody is waiting: allow it much longer than a live answer.
+  const data = await post("/reconcile", { flagged: flaggedMoments }, 60000);
   return { complaints: data.complaints, feedback: data.feedback };
 }

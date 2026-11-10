@@ -1,6 +1,8 @@
 import Badge from "./Badge.jsx";
 import DeleteButton from "./DeleteButton.jsx";
 
+const LANGUAGE_LABELS = { "en-IN": "English", "hi-IN": "Hindi", "pa-IN": "Punjabi" };
+
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
@@ -51,6 +53,9 @@ export default function CallDetail({ call, loading, error, onDelete }) {
               <div className="flex items-center gap-2 text-xs text-text-muted">
                 <span className="font-semibold text-text">{entry.role === "user" ? "Customer" : "Agent"}</span>
                 <span>{formatTime(entry.timestamp)}</span>
+                {entry.role === "user" && entry.language && (
+                  <Badge value={LANGUAGE_LABELS[entry.language] || entry.language} />
+                )}
                 {entry.classification && entry.classification !== "normal" && <Badge value={entry.classification} />}
               </div>
               <p className="mt-0.5 text-sm text-text">{entry.content}</p>
