@@ -88,6 +88,7 @@ class CallSession {
     this.reprompts = 0;
     this.silenceTimer = null;
     this.persist = Promise.resolve(); // the previous turn's database write
+    this.turnHeardAt = null; // when the current turn's transcript arrived (for timing logs)
     this.closed = false;
   }
 
@@ -196,12 +197,17 @@ class CallSession {
     this.pendingMark = mark;
     try {
       const stats = await this.tts.speak(text, {
-        onAudio: (audio) =>
+        onAudio: (audio) => {
+          if (this.turnHeardAt) {
+            this.log(`first audio of the reply went to Twilio ${Date.now() - this.turnHeardAt} ms after the transcript arrived`);
+            this.turnHeardAt = null;
+          }
           this.sendToTwilio({
             event: "media",
             streamSid: this.streamSid,
             media: { payload: audio.toString("base64") },
-          }),
+          });
+        },
       });
       this.log(`spoke ${stats.audioSeconds.toFixed(1)}s of audio (first audio after ${stats.firstAudioMs} ms)`);
     } catch (err) {
@@ -231,22 +237,28 @@ class CallSession {
   async handleTurn(t) {
     const heardAt = Date.now();
     this.reprompts = 0;
+    this.turnHeardAt = heardAt;
     this.language = nextConversationLanguage(this.language, t.text, t.language);
     this.log(`heard "${t.text}" (Gnani tag ${t.language}, STT ${t.latencyMs} ms) -> conversation language ${this.language}`);
 
     await this.persist; // the previous turn must be saved before its history is read
     const history = (await this.deps.getHistory(this.callId)) || [];
+    const historyMs = Date.now() - heardAt;
 
     let answer;
     let classification = "normal";
+    const ragStart = Date.now();
     try {
       ({ answer, classification } = await this.deps.askRag(t.text, history, this.language));
     } catch (err) {
-      this.log("RAG service failed:", err.message);
+      this.log(`RAG service failed after ${Date.now() - ragStart} ms:`, err.message);
       await this.say(phrase("trouble", this.language));
       return;
     }
-    this.log(`answer in ${Date.now() - heardAt} ms: "${answer}" [${classification}]`);
+    this.log(
+      `answer ready ${Date.now() - heardAt} ms after the transcript (database ${historyMs} ms, ` +
+        `RAG service ${Date.now() - ragStart} ms): "${answer}" [${classification}]`
+    );
 
     if (isGoodbye(t.text)) this.endAfterReply = true;
     this.persist = Promise.resolve(this.deps.appendTurn(this.callId, t.text, answer, classification)).catch((err) =>

@@ -1,9 +1,24 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from rag import get_answer, reconcile_flagged_moments
+from rag import get_answer, reconcile_flagged_moments, retrieve_context
 
-app = FastAPI(title="Restaurant CS Agent — RAG Service")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Do the slow one-time work now instead of during the first phone call: loading the
+    # embedding model (several seconds) and opening the MongoDB connection.
+    try:
+        retrieve_context("warm up")
+        print("RAG warm-up done: embedding model loaded, MongoDB connected.")
+    except Exception as exc:  # never block startup; the first request will just be slower
+        print(f"RAG warm-up failed ({exc}); the first request will be slow.")
+    yield
+
+
+app = FastAPI(title="Restaurant CS Agent — RAG Service", lifespan=lifespan)
 
 
 class Message(BaseModel):
@@ -14,6 +29,10 @@ class Message(BaseModel):
 class AskRequest(BaseModel):
     message: str
     history: list[Message] = []
+    # Conversation language so far, as a code such as "hi-IN" / "pa-IN" / "en-IN"
+    # (the detected_language_code from Gnani STT). Optional: used only as a
+    # tie-breaker when the latest message is too short to tell the language.
+    language: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -47,15 +66,16 @@ def ask(request: AskRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
     history = [{"role": m.role, "content": m.content} for m in request.history]
-    result = get_answer(request.message, history)
-    return AskResponse(**result)
+    result = get_answer(request.message, history, language=request.language)
+    return AskResponse(answer=result["answer"], classification=result["classification"])
 
 
 @app.post("/reconcile", response_model=ReconcileResponse)
 def reconcile(request: ReconcileRequest):
     """
     Called once, at call-end, with the moments flagged as complaint/feedback
-    during the call. Returns a deduplicated, cleaned-up list of each.
+    during the call. Returns a deduplicated, cleaned-up list of each
+    (always written in English, whatever language the call was in).
     """
     flagged = [
         {
